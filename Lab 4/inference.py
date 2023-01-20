@@ -1,0 +1,98 @@
+import numpy as np
+import pymc3 as pm
+import theano.tensor as tt
+import matplotlib.pyplot as plt
+from scipy.stats.mstats import mquantiles
+from scipy.special import expit
+
+def main():
+    np.set_printoptions(precision=3, suppress=True)
+    challenger_data = np.genfromtxt("challenger_data.csv", skip_header=1,
+                                    usecols=[1, 2], missing_values="NA",
+                                    delimiter=",")
+    #drop the NA values
+    challenger_data = challenger_data[~np.isnan(challenger_data[:, 1])]
+
+    temperature = challenger_data[:, 0]
+    D = challenger_data[:, 1]  # defect or not?
+
+    #notice the`value` here. We explain why below.
+    with pm.Model() as model:
+        print(0)
+        beta = pm.Normal("beta", mu=0, tau=0.001, testval=0)
+        alpha = pm.Normal("alpha", mu=0, tau=0.001, testval=0)
+        p = pm.Deterministic("p", 1.0/(1. + tt.exp(beta*temperature + alpha)))
+        observed = pm.Bernoulli("bernoulli_obs", p, observed=D)
+        print(1)
+
+        start = pm.find_MAP()
+        step = pm.Metropolis()
+        trace = pm.sample(30000, step=step, start=start)#CHANGE THIS
+        burned_trace = trace[10000::2]
+        print(2)
+
+        alpha_samples, beta_samples = plot_posteriors(burned_trace)
+        t, p_t, mean_prob_t = plot_probabilities(alpha_samples, beta_samples, temperature, D)
+        plot_credible_intervals(t, p_t, mean_prob_t, temperature, D)
+        print(3)
+
+def plot_posteriors(burned_trace):
+    alpha_samples = burned_trace["alpha"][:, None]  # best to make them 1d
+    beta_samples = burned_trace["beta"][:, None]
+    plt.subplot(211)
+    plt.title(r"Posterior distributions of the variables $\alpha, \beta$")
+    plt.hist(beta_samples, histtype='stepfilled', bins=35, alpha=0.85,
+             label=r"posterior of $\beta$", color="#7A68A6", density=True)
+    plt.legend()
+    plt.subplot(212)
+    plt.hist(alpha_samples, histtype='stepfilled', bins=35, alpha=0.85,
+             label=r"posterior of $\alpha$", color="#A60628", density=True)
+    plt.legend();
+    plt.show()
+    return alpha_samples, beta_samples
+
+def plot_probabilities(alpha_samples, beta_samples, temperature, D):
+    t = np.linspace(temperature.min() - 5, temperature.max()+5, 50)[:, None]
+    p_t = logistic(t.T, beta_samples, alpha_samples)
+    mean_prob_t = p_t.mean(axis=0)
+    #p_t = expit(np.dot(t.T,beta_samples) + alpha_samples)
+    plt.plot(t, mean_prob_t, lw=3, label="average posterior \nprobability of defect")
+    plt.plot(t, p_t[0, :], ls="--", label="realization from posterior")
+    plt.plot(t, p_t[-2, :], ls="--", label="realization from posterior")
+    plt.scatter(temperature, D, color="k", s=50, alpha=0.5)
+    plt.title("Posterior expected value of probability of defect; plus realizations")
+    plt.legend(loc="lower left")
+    plt.ylim(-0.1, 1.1)
+    plt.xlim(t.min(), t.max())
+    plt.ylabel("probability")
+    plt.xlabel("temperature");
+    mean_prob_t = p_t.mean(axis=0)
+    plt.show()
+    return t, p_t, mean_prob_t
+
+def plot_credible_intervals(t, p_t, mean_prob_t, temperature, D):
+    # vectorized bottom and top 2.5% quantiles for credible intervals
+    qs = mquantiles(p_t, [0.025, 0.975], axis=0)
+    plt.fill_between(t[:, 0], *qs, alpha=0.7,
+                     color="#7A68A6")
+
+    plt.plot(t[:, 0], qs[0], label="95% CI", color="#7A68A6", alpha=0.7)
+
+    plt.plot(t, mean_prob_t, lw=1, ls="--", color="k",
+             label="average posterior \nprobability of defect")
+
+    plt.xlim(t.min(), t.max())
+    plt.ylim(-0.02, 1.02)
+    plt.legend(loc="lower left")
+    plt.scatter(temperature, D, color="k", s=50, alpha=0.5)
+    plt.xlabel("temp, $t$")
+
+    plt.ylabel("probability estimate")
+    plt.title("Posterior probability estimates given temp. $t$");
+    plt.show()
+
+def logistic(x, beta, alpha=0):
+    return 1.0 / (1.0 + np.exp(np.dot(beta, x) + alpha))
+
+if __name__ == "__main__":
+    main()
